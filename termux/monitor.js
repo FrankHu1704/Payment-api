@@ -11,7 +11,7 @@ const path = require('path');
 const CONFIG_FILE = path.join(__dirname, 'config.json');
 
 let config = {
-  apiUrl: 'https://SEU-PROJETO.vercel.app/api/sms',
+  apiUrl: 'https://payment-api-blond.vercel.app/api/sms',
   apiKey: 'defina-a-mesma-chave-da-SMS_API_KEY-na-vercel'
 };
 

@@ -27,14 +27,26 @@ Celular (Termux) --POST /api/sms--> Vercel (api/*.js) --insert--> Supabase (Post
 
 ## Deploy (Vercel)
 
-1. Importe o repositório na Vercel (ou `vercel --prod` via CLI).
-2. Defina as variáveis de ambiente do projeto (Settings → Environment Variables),
-   veja `.env.example`:
-   - `SUPABASE_URL`
-   - `SUPABASE_ANON_KEY`
-   - `SMS_API_KEY` — chave secreta que autentica o monitor Termux
-3. Deploy. As rotas ficam em `/api/sms`, `/api/stats`, `/api/logs`, `/api/status`, e o
-   dashboard na raiz (`/`).
+Já publicado em: **https://payment-api-blond.vercel.app**
+
+Faltam 2 passos manuais no painel da Vercel (não há API para automatizar nenhum dos
+dois com segurança):
+
+1. **Settings → Environment Variables** — adicione (Production):
+   - `SUPABASE_URL` = `https://vatvdkwuidtstyonwrwl.supabase.co`
+   - `SUPABASE_ANON_KEY` = a chave "anon" do projeto Supabase "Senga" (Project Settings → API)
+   - `SMS_API_KEY` = uma chave secreta à sua escolha (o monitor Termux precisa da mesma)
+
+   Depois de salvar, redeploy (Deployments → ⋯ → Redeploy) para as functions pegarem
+   as novas variáveis.
+
+2. **Settings → Deployment Protection** — por padrão a Vercel protege o deployment com
+   login (SSO), o que bloqueia tanto o navegador quanto o monitor Termux. Desative a
+   proteção para Production (ou gere um "Protection Bypass for Automation" e inclua o
+   header nas requisições do monitor).
+
+Para deploys futuros (`vercel --prod` ou reimportando o repo), as rotas ficam em
+`/api/sms`, `/api/stats`, `/api/logs`, `/api/status`, e o dashboard na raiz (`/`).
 
 ## Banco de dados (Supabase)
 
