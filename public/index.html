@@ -1,233 +1,4 @@
-// ============================================================
-// SMS FORWARDER - VERSÃO MELHORADA COM DASHBOARD FURACÃO
-// ============================================================
-
-const axios = require('axios');
-const { exec } = require('child_process');
-const fs = require('fs');
-const path = require('path');
-const express = require('express');
-const http = require('http');
-const socketIo = require('socket.io');
-const cors = require('cors');
-const os = require('os');
-
-const CONFIG_FILE = path.join(__dirname, 'config.json');
-const LOG_FILE = path.join(__dirname, 'sms_log.json');
-
-let config = {
-  apiUrl: process.env.SMS_API_URL || '207.180.248.161:3030/sms',
-  apiKey: process.env.SMS_API_KEY || '21b0e2aeb4044c579b72abf39f40a854'
-};
-
-if (fs.existsSync(CONFIG_FILE)) {
-  try {
-    const saved = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-    config = { ...config, ...saved };
-  } catch(e) {}
-}
-
-if (!fs.existsSync(LOG_FILE)) {
-  fs.writeFileSync(LOG_FILE, JSON.stringify([]));
-}
-
-function salvarConfig() { fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2)); }
-function obterLog() { try { return JSON.parse(fs.readFileSync(LOG_FILE, 'utf8')); } catch(e) { return []; } }
-function salvarLog(log) { fs.writeFileSync(LOG_FILE, JSON.stringify(log, null, 2)); }
-
-// ============================================================
-// DETECÇÃO
-// ============================================================
-function detectarCodigo(body) {
-  const mpesaMatch = body.match(/Confirmado\s+([A-Z0-9]{10,12})\.?/i);
-  if (mpesaMatch) return { codigo: mpesaMatch[1], servico: 'M-PESA' };
-
-  const emolaMatch = body.match(/(PP[A-Za-z0-9.\-]{8,})/i);
-  if (emolaMatch) return { codigo: emolaMatch[1], servico: 'EMOLA' };
-
-  return null;
-}
-
-function extrairValor(body) {
-  const match = body.match(/(?:TRANSFERISTE|RECEBESTE|VALOR)[\s:]*([\d.,]+)\s*MT/i);
-  if (match) return parseFloat(match[1].replace(',', '.'));
-  return null;
-}
-
-// ============================================================
-// SERVIDOR
-// ============================================================
-const app = express();
-const server = http.createServer(app);
-const io = socketIo(server, { cors: { origin: "*" } });
-
-app.use(cors());
-app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
-
-// ============================================================
-// ROTAS
-// ============================================================
-app.get('/api/config', (req, res) => {
-  res.json({ apiUrl: config.apiUrl, apiKey: config.apiKey });
-});
-
-app.post('/api/config', (req, res) => {
-  config.apiUrl = req.body.apiUrl || config.apiUrl;
-  config.apiKey = req.body.apiKey || config.apiKey;
-  salvarConfig();
-  console.log('✅ Configuração salva');
-  res.json({ success: true });
-});
-
-app.get('/api/stats', (req, res) => {
-  const log = obterLog();
-  const total = log.length;
-  const mpesa = log.filter(x => x.servico === 'M-PESA').length;
-  const emola = log.filter(x => x.servico === 'EMOLA').length;
-  const totalValor = log.reduce((acc, x) => acc + (x.valor || 0), 0);
-  res.json({ total, mpesa, emola, totalValor });
-});
-
-app.get('/api/logs', (req, res) => {
-  const log = obterLog();
-  res.json(log.slice(-100).reverse());
-});
-
-app.get('/api/ping', async (req, res) => {
-  if (!config.apiUrl) return res.json({ status: 'nao_configurado' });
-
-  try {
-    const baseUrl = config.apiUrl.replace('/sms', '').replace(/\/$/, '');
-    await axios.get(`${baseUrl}/api/status`, { timeout: 5000 });
-    res.json({ status: 'online', latency: 50 });
-  } catch(e) {
-    res.json({ status: 'offline' });
-  }
-});
-
-app.post('/api/restart', (req, res) => {
-  if (intervalId) clearInterval(intervalId);
-  iniciarMonitor();
-  res.json({ success: true });
-});
-
-// ============================================================
-// MONITOR
-// ============================================================
-let intervalId = null;
-
-async function enviarSMS() {
-  if (!config.apiUrl || !config.apiKey) {
-    console.log('⚠️ Aguardando configuração...');
-    return;
-  }
-
-  exec('termux-sms-list -l 50', async (err, stdout) => {
-    if (err || !stdout || stdout.trim() === '[]') return;
-
-    let mensagens;
-    try { mensagens = JSON.parse(stdout); } catch(e) { return; }
-
-    const log = obterLog();
-    let enviados = 0;
-
-    for (let sms of mensagens) {
-      const body = sms.body || '';
-      const detectado = detectarCodigo(body);
-      if (!detectado) continue;
-
-      const jaEnviado = log.some(x => x.codigo === detectado.codigo);
-      if (jaEnviado) continue;
-
-      const valor = extrairValor(body);
-
-      console.log(`\n📱 ${detectado.servico}: ${detectado.codigo} - ${valor || '?'}MT`);
-
-      try {
-        const response = await axios({
-          method: 'POST',
-          url: config.apiUrl,
-          headers: {
-            'Authorization': `Bearer ${config.apiKey}`,
-            'Content-Type': 'application/json'
-          },
-          data: { body: body },
-          timeout: 10000
-        });
-
-        const registro = {
-          codigo: detectado.codigo,
-          valor: valor,
-          servico: detectado.servico,
-          data: new Date().toISOString(),
-          status: 'sucesso',
-          resposta: response.data
-        };
-
-        log.push(registro);
-        salvarLog(log);
-        enviados++;
-
-        console.log(`✅ Enviado! Resposta: ${response.data?.message || 'OK'}`);
-        io.emit('new-sms', registro);
-
-      } catch(error) {
-        const erroMsg = error.response?.data?.message || error.message;
-        const statusCode = error.response?.status || error.code;
-        console.log(`❌ Erro ${statusCode}: ${erroMsg}`);
-
-        const registro = {
-          codigo: detectado.codigo,
-          valor: valor,
-          servico: detectado.servico,
-          data: new Date().toISOString(),
-          status: 'erro',
-          erro: `${statusCode} - ${erroMsg}`
-        };
-
-        log.push(registro);
-        salvarLog(log);
-        io.emit('new-sms', registro);
-      }
-    }
-
-    if (enviados > 0) {
-      console.log(`📊 ${enviados} novo(s) comprovativo(s) enviado(s)`);
-      io.emit('stats-updated');
-    }
-  });
-}
-
-async function iniciarMonitor() {
-  console.log('\n🚀 Iniciando monitoramento...');
-  if (intervalId) clearInterval(intervalId);
-  await enviarSMS();
-  intervalId = setInterval(enviarSMS, 15000);
-  console.log('⏱️  Verificando a cada 15 segundos\n');
-}
-
-// ============================================================
-// WEBSOCKET
-// ============================================================
-io.on('connection', (socket) => {
-  console.log('📡 Cliente conectado');
-  socket.emit('logs', obterLog().slice(-50).reverse());
-  socket.emit('stats', {
-    total: obterLog().length,
-    mpesa: obterLog().filter(x => x.servico === 'M-PESA').length,
-    emola: obterLog().filter(x => x.servico === 'EMOLA').length,
-    totalValor: obterLog().reduce((acc, x) => acc + (x.valor || 0), 0)
-  });
-});
-
-// ============================================================
-// PAINEL HTML
-// ============================================================
-const publicDir = path.join(__dirname, 'public');
-if (!fs.existsSync(publicDir)) fs.mkdirSync(publicDir);
-
-const html = `<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="pt">
 <head>
   <meta charset="UTF-8">
@@ -491,46 +262,30 @@ const html = `<!DOCTYPE html>
       color: var(--accent);
     }
 
-    /* ── INPUTS ── */
-    .input-group { margin-bottom: 10px; }
-    .input-label {
-      display: block;
+    /* ── INFO / ENDPOINT ── */
+    .kv-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 12px;
+    }
+    .kv-row:last-child { border-bottom: none; }
+    .kv-label { color: var(--text2); font-weight: 500; }
+    .kv-value {
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      color: var(--text);
+      word-break: break-all;
+      text-align: right;
+    }
+    .hint {
       font-size: 11px;
       color: var(--text2);
-      font-weight: 600;
-      margin-bottom: 5px;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
+      margin-top: 10px;
+      line-height: 1.5;
     }
-    input[type="text"], input[type="password"] {
-      width: 100%;
-      padding: 11px 14px;
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      color: var(--text);
-      font-family: 'Inter', sans-serif;
-      font-size: 13px;
-      outline: none;
-      transition: border 0.2s;
-    }
-    input:focus { border-color: var(--accent); }
-
-    .btn-row { display: flex; gap: 8px; margin-top: 12px; }
-    .btn {
-      flex: 1;
-      padding: 11px;
-      border: none;
-      border-radius: 10px;
-      font-family: 'Inter', sans-serif;
-      font-size: 13px;
-      font-weight: 700;
-      cursor: pointer;
-      transition: opacity 0.2s;
-    }
-    .btn:active { opacity: 0.7; }
-    .btn-primary { background: var(--accent); color: #000; }
-    .btn-ghost { background: var(--surface2); color: var(--text2); border: 1px solid var(--border); }
 
     /* ── LOG ITEMS ── */
     .logs-wrap {
@@ -547,10 +302,9 @@ const html = `<!DOCTYPE html>
       margin-bottom: 6px;
       background: var(--surface2);
       border-radius: 10px;
-      border-left: 3px solid var(--erro);
+      border-left: 3px solid var(--accent);
       transition: background 0.2s;
     }
-    .log-item.sucesso { border-left-color: var(--accent); }
     .log-body { flex: 1; min-width: 0; }
     .log-top {
       display: flex;
@@ -571,7 +325,6 @@ const html = `<!DOCTYPE html>
     .pill-mpesa { background: var(--mpesa-dim); color: var(--mpesa); }
     .pill-emola { background: var(--emola-dim); color: var(--emola); }
     .pill-ok { background: var(--accent-dim); color: var(--accent); }
-    .pill-err { background: var(--erro-dim); color: var(--erro); }
     .log-code {
       font-family: 'SF Mono', 'Fira Code', monospace;
       font-size: 12px;
@@ -593,11 +346,6 @@ const html = `<!DOCTYPE html>
       font-size: 10px;
       color: var(--text2);
       margin-top: 3px;
-    }
-    .log-erro {
-      font-size: 10px;
-      color: var(--erro);
-      margin-top: 2px;
     }
 
     /* ── FOOTER ── */
@@ -694,20 +442,21 @@ const html = `<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- CONFIG -->
+  <!-- ENDPOINT / CONEXÃO -->
   <div class="card">
-    <div class="card-head">⚙️ Configuração</div>
-    <div class="input-group">
-      <label class="input-label">URL da API</label>
-      <input type="text" id="apiUrl" placeholder="http://IP:3030/sms">
+    <div class="card-head">🔌 Endpoint de Recebimento</div>
+    <div class="kv-row">
+      <span class="kv-label">URL</span>
+      <span class="kv-value" id="endpointUrl">—</span>
     </div>
-    <div class="input-group">
-      <label class="input-label">Chave API</label>
-      <input type="password" id="apiKey" placeholder="Sua API Key">
+    <div class="kv-row">
+      <span class="kv-label">Autenticação</span>
+      <span class="kv-value">Bearer &lt;SMS_API_KEY&gt;</span>
     </div>
-    <div class="btn-row">
-      <button class="btn btn-primary" id="saveBtn">Salvar</button>
-      <button class="btn btn-ghost" id="restartBtn">Reiniciar</button>
+    <div class="hint">
+      Configure o monitor Termux (pasta <code>/termux</code> do repositório) para enviar
+      <code>POST</code> com <code>{ "body": "&lt;texto do SMS&gt;" }</code> para esta URL,
+      usando o mesmo valor definido em <code>SMS_API_KEY</code> nas variáveis de ambiente da Vercel.
     </div>
   </div>
 
@@ -722,7 +471,6 @@ const html = `<!DOCTYPE html>
 
 <div class="toast" id="toast"></div>
 
-<script src="/socket.io/socket.io.js"></script>
 <script>
 // ════════════════════════════════════════
 // TABELA DE PREÇOS FURACÃO
@@ -792,7 +540,6 @@ const TABELA = [
   { preco: 930, dados: '22GB+Ilim.', cat: 'ilimitado', label: 'Ilimitado' },
 ];
 
-// Mapa rápido preço → pacote(s)
 const PRECO_MAP = {};
 TABELA.forEach(p => {
   if (!PRECO_MAP[p.preco]) PRECO_MAP[p.preco] = [];
@@ -803,7 +550,6 @@ function identificarPacote(valor) {
   if (!valor) return null;
   const v = Math.round(valor);
   if (PRECO_MAP[v]) return PRECO_MAP[v][0];
-  // Tolerância ±1 MT
   if (PRECO_MAP[v - 1]) return PRECO_MAP[v - 1][0];
   if (PRECO_MAP[v + 1]) return PRECO_MAP[v + 1][0];
   return null;
@@ -830,10 +576,10 @@ function atualizarSaudacao() {
 }
 
 // ════════════════════════════════════════
-// SOCKET + LÓGICA
+// LÓGICA
 // ════════════════════════════════════════
-const socket = io();
 let allLogs = [];
+let seenCodigos = null;
 let currentFilter = 'todos';
 
 function showToast(msg) {
@@ -856,15 +602,11 @@ async function atualizarStats() {
   try {
     const res = await fetch('/api/stats');
     const data = await res.json();
-    animarNumero('statTotal', data.total);
-    animarNumero('statMpesa', data.mpesa);
-    animarNumero('statEmola', data.emola);
+    document.getElementById('statTotal').textContent = data.total;
+    document.getElementById('statMpesa').textContent = data.mpesa;
+    document.getElementById('statEmola').textContent = data.emola;
     document.getElementById('statValor').textContent = data.totalValor.toLocaleString('pt-PT');
   } catch(e) {}
-}
-
-function animarNumero(id, valor) {
-  document.getElementById(id).textContent = valor;
 }
 
 // ── VENDAS POR PACOTE ──
@@ -922,38 +664,10 @@ function renderizarVendas() {
   ).join('');
 }
 
-// ── CONFIG ──
-async function carregarConfig() {
+// ── STATUS ──
+async function atualizarStatus() {
   try {
-    const res = await fetch('/api/config');
-    const data = await res.json();
-    document.getElementById('apiUrl').value = data.apiUrl || '';
-    document.getElementById('apiKey').value = data.apiKey || '';
-  } catch(e) {}
-}
-
-async function salvarConfig() {
-  await fetch('/api/config', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      apiUrl: document.getElementById('apiUrl').value,
-      apiKey: document.getElementById('apiKey').value
-    })
-  });
-  showToast('✅ Configuração salva');
-  await reiniciarMonitor();
-}
-
-async function reiniciarMonitor() {
-  await fetch('/api/restart', { method: 'POST' });
-  showToast('🔄 Monitor reiniciado');
-}
-
-// ── PING ──
-async function atualizarPing() {
-  try {
-    const res = await fetch('/api/ping');
+    const res = await fetch('/api/status');
     const data = await res.json();
     const dot = document.getElementById('statusDot');
     const txt = document.getElementById('statusText');
@@ -961,9 +675,6 @@ async function atualizarPing() {
     if (data.status === 'online') {
       dot.classList.add('online');
       txt.textContent = 'API Online';
-    } else if (data.status === 'nao_configurado') {
-      dot.classList.add('pending');
-      txt.textContent = 'Configure a API';
     } else {
       dot.classList.add('offline');
       txt.textContent = 'API Offline';
@@ -978,28 +689,21 @@ async function atualizarPing() {
 function renderizarLog(log) {
   const pkg = identificarPacote(log.valor);
   const servicoClass = (log.servico === 'EMOLA') ? 'pill-emola' : 'pill-mpesa';
-  const statusClass = log.status === 'sucesso' ? 'pill-ok' : 'pill-err';
-  const statusText = log.status === 'sucesso' ? '✓ OK' : '✗ ERRO';
 
   const pkgInfo = pkg
     ? '<div class="log-pkg">📦 ' + pkg.dados + ' ' + pkg.label + '</div>'
     : '';
 
-  const erroInfo = log.erro
-    ? '<div class="log-erro">' + log.erro + '</div>'
-    : '';
-
-  return '<div class="log-item ' + (log.status === 'sucesso' ? 'sucesso' : 'erro') + '">' +
+  return '<div class="log-item">' +
     '<div class="log-body">' +
       '<div class="log-top">' +
         '<span class="pill ' + servicoClass + '">' + (log.servico || 'M-PESA') + '</span>' +
-        '<span class="pill ' + statusClass + '">' + statusText + '</span>' +
+        '<span class="pill pill-ok">✓ OK</span>' +
         '<span class="log-valor">' + (log.valor ? log.valor + ' MT' : '? MT') + '</span>' +
       '</div>' +
       '<div class="log-code">' + log.codigo + '</div>' +
       pkgInfo +
       '<div class="log-meta">' + formatarData(log.data) + '</div>' +
-      erroInfo +
     '</div>' +
   '</div>';
 }
@@ -1007,81 +711,33 @@ function renderizarLog(log) {
 async function carregarLogs() {
   try {
     const res = await fetch('/api/logs');
-    allLogs = await res.json();
+    const novosLogs = await res.json();
+
+    if (seenCodigos) {
+      const novos = novosLogs.filter(l => !seenCodigos.has(l.codigo));
+      novos.reverse().forEach(l => showToast('📱 Novo comprovativo: ' + (l.valor || '?') + ' MT'));
+    }
+    seenCodigos = new Set(novosLogs.map(l => l.codigo));
+
+    allLogs = novosLogs;
     const container = document.getElementById('logsContainer');
     container.innerHTML = allLogs.map(renderizarLog).join('');
     renderizarVendas();
   } catch(e) {}
 }
 
-function adicionarLog(log) {
-  allLogs.unshift(log);
-  const container = document.getElementById('logsContainer');
-  const div = document.createElement('div');
-  div.innerHTML = renderizarLog(log);
-  const el = div.firstChild;
-  el.style.animation = 'fadeUp 0.3s ease';
-  container.insertBefore(el, container.firstChild);
-  if (container.children.length > 50) container.removeChild(container.lastChild);
-  renderizarVendas();
-}
-
 // ── INIT ──
-socket.on('connect', () => {
-  atualizarStats();
-  carregarLogs();
-  carregarConfig();
-});
-socket.on('new-sms', (sms) => {
-  adicionarLog(sms);
-  atualizarStats();
-  showToast('📱 Novo comprovativo: ' + (sms.valor || '?') + ' MT');
-});
-socket.on('stats-updated', () => atualizarStats());
-
-document.getElementById('saveBtn').onclick = salvarConfig;
-document.getElementById('restartBtn').onclick = reiniciarMonitor;
+document.getElementById('endpointUrl').textContent = window.location.origin + '/api/sms';
 
 atualizarSaudacao();
 atualizarStats();
 carregarLogs();
-carregarConfig();
-atualizarPing();
+atualizarStatus();
 
 setInterval(atualizarSaudacao, 60000);
-setInterval(atualizarPing, 10000);
-setInterval(atualizarStats, 30000);
+setInterval(atualizarStatus, 10000);
+setInterval(atualizarStats, 8000);
+setInterval(carregarLogs, 8000);
 </script>
 </body>
-</html>`;
-
-fs.writeFileSync(path.join(publicDir, 'index.html'), html);
-console.log('✅ Painel criado');
-
-// ============================================================
-// INICIAR
-// ============================================================
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`\n╔════════════════════════════════╗`);
-  console.log(`║  🌪️  FURACÃO DASHBOARD v4.0  🌪️  ║`);
-  console.log(`╠════════════════════════════════╣`);
-  console.log(`║  📱 Painel: http://localhost:${PORT} ║`);
-  const nets = os.networkInterfaces();
-  for (const name of Object.keys(nets)) {
-    for (const net of nets[name]) {
-      if (net.family === 'IPv4' && !net.internal) {
-        console.log(`║  🌐 Rede: http://${net.address}:${PORT} ║`);
-      }
-    }
-  }
-  console.log(`╚════════════════════════════════╝`);
-});
-
-iniciarMonitor();
-
-process.on('SIGINT', () => {
-  console.log('\n👋 Encerrando...');
-  if (intervalId) clearInterval(intervalId);
-  server.close(() => process.exit());
-});
+</html>

@@ -1,18 +1,12 @@
 {
   "name": "payment-api",
-  "version": "1.0.0",
-  "description": "SMS Forwarder + Dashboard - encaminha comprovativos de M-PESA/E-MOLA para uma API remota e exibe um painel em tempo real",
-  "main": "index.js",
-  "scripts": {
-    "start": "node index.js"
-  },
+  "version": "2.0.0",
+  "description": "API serverless (Vercel + Supabase) que recebe comprovativos M-PESA/E-MOLA encaminhados pelo monitor Termux e expõe um dashboard de vendas em tempo real",
+  "private": true,
   "dependencies": {
-    "axios": "^1.7.9",
-    "cors": "^2.8.5",
-    "express": "^4.21.2",
-    "socket.io": "^4.8.1"
+    "@supabase/supabase-js": "^2.47.10"
   },
   "engines": {
-    "node": ">=16"
+    "node": ">=18"
   }
 }

@@ -1,70 +1,89 @@
-# Payment API — Furacão Dashboard
+# Payment API — Furacão Dashboard (Vercel + Supabase)
 
-API/serviço em Node.js que monitora SMS de confirmação de pagamentos M-PESA e E-MOLA
-(via `termux-sms-list`, requer Termux:API no Android), reenvia cada comprovativo detectado
-para uma API remota configurável, mantém um histórico local e expõe um dashboard web em
-tempo real (via Socket.IO) com estatísticas de vendas por pacote de dados.
+API serverless que recebe comprovativos de pagamento M-PESA/E-MOLA encaminhados por um
+monitor Termux rodando no celular, grava tudo no Supabase e expõe um dashboard web com
+estatísticas de vendas em tempo (quase) real.
 
-## Funcionalidades
+## Arquitetura
 
-- **Detecção automática** de códigos de confirmação M-PESA (`Confirmado XXXXXXXXXX`) e
-  E-MOLA (`PPxxxxxxxx`), com extração do valor transacionado.
-- **Encaminhamento** de cada comprovativo novo (não duplicado) via `POST` para a API
-  configurada, com autenticação `Bearer`.
-- **Persistência** de configuração (`config.json`) e histórico de envios (`sms_log.json`)
-  em disco.
-- **Monitor automático**: verifica novas SMS a cada 15 segundos.
-- **API REST**:
-  - `GET /api/config` — lê a configuração atual (URL/chave da API remota)
-  - `POST /api/config` — atualiza a configuração
-  - `GET /api/stats` — totais (geral, M-PESA, E-MOLA, receita)
-  - `GET /api/logs` — últimos 100 registros
-  - `GET /api/ping` — testa conectividade com a API remota
-  - `POST /api/restart` — reinicia o monitor de SMS
-- **WebSocket (Socket.IO)**: eventos `new-sms` e `stats-updated` em tempo real.
-- **Dashboard** (`public/index.html`, gerado automaticamente no arranque): estatísticas,
-  vendas por pacote (tabela de preços Furacão), configuração e histórico de registros.
+O app original (monitor de SMS + dashboard num único processo com Socket.IO e arquivos
+JSON locais) não roda em serverless: `termux-sms-list` só existe dentro do Termux no
+Android, funções da Vercel não mantêm WebSocket nem disco persistente entre execuções.
+Por isso o projeto foi dividido em duas partes:
 
-## Requisitos
+1. **`/api` + `/public`** (este deploy na Vercel) — recebe os comprovativos via HTTP,
+   grava no Supabase (Postgres) e serve o dashboard. Sem estado local: cada request é
+   independente.
+2. **`/termux`** — script que continua rodando no celular via Termux, lê as SMS locais
+   com `termux-sms-list` e encaminha cada comprovativo novo para a API da Vercel.
 
-- Node.js >= 16
-- Para o encaminhamento de SMS funcionar, o processo precisa correr num dispositivo com
-  [Termux](https://termux.dev/) + Termux:API (comando `termux-sms-list`). Fora desse
-  ambiente, a API/dashboard funcionam normalmente, mas não haverá SMS para monitorar.
+```
+Celular (Termux) --POST /api/sms--> Vercel (api/*.js) --insert--> Supabase (Postgres)
+                                            |
+                                      GET /api/stats, /api/logs
+                                            |
+                                      Dashboard (public/index.html, polling)
+```
 
-## Instalação
+## Deploy (Vercel)
+
+1. Importe o repositório na Vercel (ou `vercel --prod` via CLI).
+2. Defina as variáveis de ambiente do projeto (Settings → Environment Variables),
+   veja `.env.example`:
+   - `SUPABASE_URL`
+   - `SUPABASE_ANON_KEY`
+   - `SMS_API_KEY` — chave secreta que autentica o monitor Termux
+3. Deploy. As rotas ficam em `/api/sms`, `/api/stats`, `/api/logs`, `/api/status`, e o
+   dashboard na raiz (`/`).
+
+## Banco de dados (Supabase)
+
+Tabela `public.payment_api_sms_logs`:
+
+| coluna       | tipo        | descrição                              |
+|--------------|-------------|-----------------------------------------|
+| id           | bigint      | identidade                              |
+| codigo       | text unique | código de confirmação (dedup)           |
+| valor        | numeric     | valor em MT extraído do SMS             |
+| servico      | text        | `M-PESA` ou `EMOLA`                     |
+| body         | text        | texto original do SMS                   |
+| device       | text        | identificador opcional do dispositivo   |
+| received_at  | timestamptz | data de recebimento                     |
+
+RLS habilitado, com policies de select/insert para o role `anon` — a chave anon é usada
+apenas no backend (nunca exposta ao navegador); a autenticação real de quem pode gravar é
+o `SMS_API_KEY` verificado em `api/sms.js`.
+
+## Rotas da API
+
+- `POST /api/sms` — recebe `{ "body": "<texto do SMS>" }` com
+  `Authorization: Bearer <SMS_API_KEY>`. Detecta o código (M-PESA/E-MOLA), extrai o valor,
+  ignora duplicados e grava no Supabase.
+- `GET /api/stats` — `{ total, mpesa, emola, totalValor }`.
+- `GET /api/logs` — últimos 100 registros.
+- `GET /api/status` — `{ status: 'online' | 'offline' }` (testa conexão com o Supabase).
+
+## Monitor Termux (`/termux`)
+
+Roda no celular Android com [Termux](https://termux.dev/) + Termux:API:
 
 ```bash
+cd termux
 npm install
-```
-
-## Configuração
-
-Por padrão, a URL e a chave da API remota podem ser definidas via variáveis de ambiente:
-
-```bash
-export SMS_API_URL="http://SEU_IP:3030/sms"
-export SMS_API_KEY="sua-chave-secreta"
-export PORT=3000
-```
-
-Também podem ser alteradas em tempo de execução pelo próprio dashboard (aba
-Configuração), que persiste os valores em `config.json`.
-
-## Uso
-
-```bash
+node -e "require('fs').writeFileSync('config.json', JSON.stringify({apiUrl:'https://SEU-PROJETO.vercel.app/api/sms', apiKey:'mesmo-valor-de-SMS_API_KEY-na-vercel'}, null, 2))"
+# edite termux/config.json com a URL real do seu deploy e a chave configurada na Vercel
 npm start
 ```
 
-O dashboard fica disponível em `http://localhost:3000` (e no IP da rede local).
+Ele lê `termux-sms-list -l 50` a cada 15s, detecta comprovativos novos e faz `POST` para
+a API na Vercel. Mantém um `enviados.json` local só para não reenviar o mesmo SMS (o
+Supabase também rejeita duplicados do lado do servidor).
 
-## Estrutura
+## Desenvolvimento local da API
 
+```bash
+npm install
+npx vercel dev
 ```
-index.js          # servidor Express + Socket.IO, monitor de SMS e geração do dashboard
-package.json
-public/            # gerado automaticamente (index.html do dashboard)
-config.json        # gerado automaticamente (config em runtime, não versionado)
-sms_log.json       # gerado automaticamente (histórico em runtime, não versionado)
-```
+
+(requer `SUPABASE_URL`, `SUPABASE_ANON_KEY` e `SMS_API_KEY` num `.env.local`)

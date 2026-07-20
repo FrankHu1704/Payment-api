@@ -1,6 +1,8 @@
 node_modules/
-config.json
-sms_log.json
-public/
 npm-debug.log*
 .env
+.vercel
+
+# Estado local do monitor Termux (config.json com a API key, histórico local)
+termux/config.json
+termux/enviados.json
