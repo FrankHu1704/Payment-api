@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard do Lojista</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+  <style>
+    :root {
+      --bg: #06080c; --surface: #0d1117; --surface2: #151b25; --border: #1e2733;
+      --text: #e6edf3; --text2: #7d8590; --accent: #00e676; --accent-dim: rgba(0,230,118,0.12);
+      --erro: #f44336; --erro-dim: rgba(244,67,54,0.1);
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+    .wrap { max-width: 720px; margin: 0 auto; padding: 24px 16px 80px; }
+    h1 { font-size: 20px; font-weight: 800; margin-bottom: 4px; }
+    .sub { color: var(--text2); font-size: 13px; margin-bottom: 20px; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 18px; margin-bottom: 16px; }
+    .card h2 { font-size: 14px; font-weight: 700; margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+    label { display: block; font-size: 11px; color: var(--text2); font-weight: 600; margin-bottom: 5px; text-transform: uppercase; }
+    input { width: 100%; padding: 10px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 13px; margin-bottom: 10px; }
+    input:focus { outline: none; border-color: var(--accent); }
+    .btn { padding: 10px 16px; border: none; border-radius: 8px; font-weight: 700; font-size: 13px; cursor: pointer; }
+    .btn-primary { background: var(--accent); color: #000; }
+    .btn-ghost { background: var(--surface2); color: var(--text2); border: 1px solid var(--border); }
+    .btn-danger { background: var(--erro-dim); color: var(--erro); }
+    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .tabs { display: flex; gap: 6px; margin-bottom: 16px; }
+    .tab { flex: 1; padding: 8px; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; text-align: center; cursor: pointer; font-size: 13px; font-weight: 600; color: var(--text2); }
+    .tab.active { background: var(--accent-dim); color: var(--accent); border-color: rgba(0,230,118,0.3); }
+    .list-item { display: flex; justify-content: space-between; align-items: center; padding: 10px; background: var(--surface2); border-radius: 8px; margin-bottom: 6px; font-size: 12px; }
+    .mono { font-family: 'SF Mono', monospace; word-break: break-all; }
+    .pill { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 10px; font-weight: 700; }
+    .pill-paid { background: var(--accent-dim); color: var(--accent); }
+    .pill-pending { background: rgba(255,145,0,0.12); color: #ff9100; }
+    .pill-failed { background: var(--erro-dim); color: var(--erro); }
+    .alert { padding: 12px; border-radius: 8px; font-size: 12px; margin-bottom: 12px; }
+    .alert-warn { background: rgba(255,145,0,0.12); color: #ff9100; border: 1px solid rgba(255,145,0,0.3); }
+    .alert-error { background: var(--erro-dim); color: var(--erro); }
+    .empty { text-align: center; padding: 20px; color: var(--text2); font-size: 13px; }
+    .hidden { display: none !important; }
+    .stat { font-size: 26px; font-weight: 800; color: var(--accent); }
+    .stat-label { font-size: 11px; color: var(--text2); text-transform: uppercase; }
+  </style>
+</head>
+<body>
+
+<div class="wrap">
+  <h1>Dashboard do Lojista</h1>
+  <div class="sub">Gerencie suas chaves de API, webhooks e acompanhe seus recebimentos.</div>
+
+  <!-- AUTH -->
+  <div id="authSection" class="card">
+    <div class="tabs">
+      <div class="tab active" data-form="login" onclick="mostrarForm('login')">Entrar</div>
+      <div class="tab" data-form="signup" onclick="mostrarForm('signup')">Criar conta</div>
+    </div>
+
+    <div id="loginForm">
+      <label>E-mail</label>
+      <input type="email" id="loginEmail" placeholder="voce@negocio.co.mz">
+      <label>Senha</label>
+      <input type="password" id="loginPassword">
+      <button class="btn btn-primary" onclick="login()">Entrar</button>
+      <div id="loginError"></div>
+    </div>
+
+    <div id="signupForm" class="hidden">
+      <label>Nome do negócio</label>
+      <input type="text" id="signupBusinessName" placeholder="Minha Loja">
+      <label>E-mail</label>
+      <input type="email" id="signupEmail">
+      <label>Senha</label>
+      <input type="password" id="signupPassword">
+      <button class="btn btn-primary" onclick="signup()">Criar conta</button>
+      <div id="signupError"></div>
+      <div class="alert alert-warn" style="margin-top:10px;">
+        Se o Supabase Auth exigir confirmação de e-mail, verifique sua caixa de entrada
+        antes de conseguir entrar.
+      </div>
+    </div>
+  </div>
+
+  <!-- DASHBOARD -->
+  <div id="dashboardSection" class="hidden">
+    <div class="card row" style="justify-content: space-between;">
+      <div>
+        <div style="font-weight:700;" id="merchantName">—</div>
+        <div class="sub" id="merchantEmail" style="margin:0;"></div>
+      </div>
+      <button class="btn btn-ghost" onclick="logout()">Sair</button>
+    </div>
+
+    <div class="card row" style="justify-content: space-around; text-align:center;">
+      <div><div class="stat" id="statTotal">0</div><div class="stat-label">Transações</div></div>
+      <div><div class="stat" id="statReceita">0</div><div class="stat-label">Receita (MT)</div></div>
+    </div>
+
+    <div class="card">
+      <h2>Chaves de API</h2>
+      <div id="apiKeyNew" class="hidden alert alert-warn"></div>
+      <div id="apiKeysList"><div class="empty">Nenhuma chave criada</div></div>
+      <button class="btn btn-primary" onclick="criarChave()" style="margin-top:10px;">+ Nova chave</button>
+    </div>
+
+    <div class="card">
+      <h2>Webhook</h2>
+      <label>URL do seu endpoint</label>
+      <input type="text" id="webhookUrl" placeholder="https://seu-sistema.com/webhooks/payment-api">
+      <button class="btn btn-primary" onclick="salvarWebhook()">Salvar</button>
+      <div id="webhookSecretNew" class="hidden alert alert-warn" style="margin-top:10px;"></div>
+    </div>
+
+    <div class="card">
+      <h2>Transações recentes</h2>
+      <div id="sessionsList"><div class="empty">Nenhuma transação ainda</div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const SUPABASE_URL = 'https://vatvdkwuidtstyonwrwl.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZhdHZka3d1aWR0c3R5b253cndsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM4MjAwOTksImV4cCI6MjA5OTM5NjA5OX0.nlHftgNAgbaNA0mwxbEuQXMM_xrAq-l9EseuVTedB6M';
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+function mostrarForm(qual) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.form === qual));
+  document.getElementById('loginForm').classList.toggle('hidden', qual !== 'login');
+  document.getElementById('signupForm').classList.toggle('hidden', qual !== 'signup');
+}
+
+function mostrarErro(id, msg) {
+  document.getElementById(id).innerHTML = msg ? `<div class="alert alert-error">${msg}</div>` : '';
+}
+
+async function signup() {
+  mostrarErro('signupError', '');
+  const business_name = document.getElementById('signupBusinessName').value.trim();
+  const email = document.getElementById('signupEmail').value.trim();
+  const password = document.getElementById('signupPassword').value;
+  if (!business_name || !email || !password) { mostrarErro('signupError', 'Preencha todos os campos'); return; }
+
+  const { data, error } = await sb.auth.signUp({ email, password, options: { data: { business_name } } });
+  if (error) { mostrarErro('signupError', error.message); return; }
+  if (data.session) { onLoggedIn(); } else { mostrarErro('signupError', 'Conta criada — confirme seu e-mail e depois faça login.'); }
+}
+
+async function login() {
+  mostrarErro('loginError', '');
+  const email = document.getElementById('loginEmail').value.trim();
+  const password = document.getElementById('loginPassword').value;
+  const { error } = await sb.auth.signInWithPassword({ email, password });
+  if (error) { mostrarErro('loginError', error.message); return; }
+  onLoggedIn();
+}
+
+async function logout() {
+  await sb.auth.signOut();
+  document.getElementById('dashboardSection').classList.add('hidden');
+  document.getElementById('authSection').classList.remove('hidden');
+}
+
+async function apiCall(path, options = {}) {
+  const { data: { session } } = await sb.auth.getSession();
+  const res = await fetch(path, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${session.access_token}`,
+      ...(options.headers || {})
+    }
+  });
+  return { ok: res.ok, status: res.status, body: await res.json() };
+}
+
+async function onLoggedIn() {
+  document.getElementById('authSection').classList.add('hidden');
+  document.getElementById('dashboardSection').classList.remove('hidden');
+
+  const { data: { user } } = await sb.auth.getUser();
+  const { data: merchant } = await sb.from('payment_api_merchants').select('*').eq('id', user.id).maybeSingle();
+  document.getElementById('merchantName').textContent = merchant?.business_name || user.email;
+  document.getElementById('merchantEmail').textContent = user.email;
+
+  await Promise.all([carregarChaves(), carregarWebhook(), carregarTransacoes()]);
+}
+
+async function carregarChaves() {
+  const { ok, body } = await apiCall('/api/keys');
+  const container = document.getElementById('apiKeysList');
+  if (!ok || !body.length) { container.innerHTML = '<div class="empty">Nenhuma chave criada</div>'; return; }
+  container.innerHTML = body.map(k => `
+    <div class="list-item">
+      <div>
+        <div class="mono">${k.public_key}</div>
+        <div style="color:var(--text2)">${k.label || ''} ${k.revoked_at ? '(revogada)' : ''}</div>
+      </div>
+      ${k.revoked_at ? '' : `<button class="btn btn-danger" onclick="revogarChave(${k.id})">Revogar</button>`}
+    </div>
+  `).join('');
+}
+
+async function criarChave() {
+  const label = window.prompt('Nome/etiqueta pra essa chave (opcional):', 'Default') || null;
+  const { ok, body } = await apiCall('/api/keys', { method: 'POST', body: JSON.stringify({ label }) });
+  if (!ok) { alert(body.message || 'Erro ao criar chave'); return; }
+  const box = document.getElementById('apiKeyNew');
+  box.classList.remove('hidden');
+  box.innerHTML = `<strong>Guarde a secret key agora — ela não será mostrada de novo:</strong>
+    <div class="mono" style="margin-top:6px;">${body.secretKey}</div>
+    <div class="mono" style="margin-top:4px;">public: ${body.publicKey}</div>`;
+  await carregarChaves();
+}
+
+async function revogarChave(id) {
+  if (!confirm('Revogar essa chave? Ela para de funcionar imediatamente.')) return;
+  const { ok, body } = await apiCall(`/api/keys/${id}`, { method: 'DELETE' });
+  if (!ok) { alert(body.message || 'Erro ao revogar'); return; }
+  await carregarChaves();
+}
+
+async function carregarWebhook() {
+  const { ok, body } = await apiCall('/api/webhooks');
+  if (ok && body) document.getElementById('webhookUrl').value = body.url;
+}
+
+async function salvarWebhook() {
+  const url = document.getElementById('webhookUrl').value.trim();
+  if (!url) { alert('Informe uma URL'); return; }
+  const { ok, body } = await apiCall('/api/webhooks', { method: 'POST', body: JSON.stringify({ url }) });
+  if (!ok) { alert(body.message || 'Erro ao salvar webhook'); return; }
+  if (body.secret) {
+    const box = document.getElementById('webhookSecretNew');
+    box.classList.remove('hidden');
+    box.innerHTML = `<strong>Secret do webhook (pra validar a assinatura HMAC-SHA256, header X-Webhook-Signature) — guarde agora:</strong>
+      <div class="mono" style="margin-top:6px;">${body.secret}</div>`;
+  } else {
+    alert('Webhook atualizado');
+  }
+}
+
+function pillClasse(status) {
+  if (status === 'paid') return 'pill-paid';
+  if (status === 'failed' || status === 'cancelled' || status === 'expired') return 'pill-failed';
+  return 'pill-pending';
+}
+
+async function carregarTransacoes() {
+  const { data: sessions } = await sb
+    .from('payment_api_checkout_sessions')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(50);
+
+  const container = document.getElementById('sessionsList');
+  if (!sessions || !sessions.length) {
+    container.innerHTML = '<div class="empty">Nenhuma transação ainda</div>';
+  } else {
+    container.innerHTML = sessions.map(s => `
+      <div class="list-item">
+        <div>
+          <div class="mono">${s.id}</div>
+          <div style="color:var(--text2)">${s.reference || ''} ${s.customer_msisdn ? '· ' + s.customer_msisdn : ''}</div>
+        </div>
+        <div style="text-align:right;">
+          <div>${Number(s.amount).toLocaleString('pt-PT')} ${s.currency}</div>
+          <span class="pill ${pillClasse(s.status)}">${s.status}</span>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  const { data: ledger } = await sb.from('payment_api_ledger_entries').select('net_amount');
+  const receita = (ledger || []).reduce((acc, l) => acc + Number(l.net_amount), 0);
+  document.getElementById('statTotal').textContent = sessions ? sessions.length : 0;
+  document.getElementById('statReceita').textContent = receita.toLocaleString('pt-PT');
+}
+
+// ── init ──
+(async () => {
+  const { data: { session } } = await sb.auth.getSession();
+  if (session) onLoggedIn();
+})();
+</script>
+</body>
+</html>

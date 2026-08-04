@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pagar</title>
+  <style>
+    :root {
+      --bg: #06080c; --surface: #0d1117; --border: #1e2733;
+      --text: #e6edf3; --text2: #7d8590; --accent: #00e676; --accent-dim: rgba(0,230,118,0.12);
+      --erro: #f44336; --erro-dim: rgba(244,67,54,0.1);
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, 'Segoe UI', sans-serif;
+      background: var(--bg); color: var(--text);
+      min-height: 100vh; display: flex; align-items: center; justify-content: center;
+      padding: 20px;
+    }
+    .card {
+      width: 100%; max-width: 380px;
+      background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+      padding: 28px 24px;
+    }
+    .merchant { font-size: 13px; color: var(--text2); text-align: center; margin-bottom: 4px; }
+    .amount { font-size: 34px; font-weight: 800; text-align: center; margin-bottom: 24px; }
+    .amount span { font-size: 16px; color: var(--text2); font-weight: 600; }
+    label { display: block; font-size: 11px; color: var(--text2); font-weight: 600; margin-bottom: 6px; text-transform: uppercase; }
+    input {
+      width: 100%; padding: 13px 14px; background: var(--bg); border: 1px solid var(--border);
+      border-radius: 10px; color: var(--text); font-size: 15px; margin-bottom: 14px;
+    }
+    input:focus { outline: none; border-color: var(--accent); }
+    .btn {
+      width: 100%; padding: 14px; border: none; border-radius: 10px;
+      background: var(--accent); color: #000; font-weight: 800; font-size: 15px; cursor: pointer;
+    }
+    .btn:disabled { opacity: 0.6; cursor: default; }
+    .status { text-align: center; margin-top: 18px; font-size: 13px; }
+    .status.wait { color: var(--text2); }
+    .status.ok { color: var(--accent); font-weight: 700; }
+    .status.err { color: var(--erro); font-weight: 700; }
+    .hint { text-align: center; font-size: 11px; color: var(--text2); margin-top: 8px; }
+    .spinner {
+      width: 18px; height: 18px; border: 2px solid var(--border); border-top-color: var(--accent);
+      border-radius: 50%; display: inline-block; margin-right: 6px; vertical-align: -3px;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+
+<div class="card">
+  <div id="loadingState">
+    <div class="merchant">Carregando...</div>
+  </div>
+
+  <div id="payState" style="display:none;">
+    <div class="merchant" id="merchantName"></div>
+    <div class="amount"><span id="currency"></span> <span id="amount"></span></div>
+
+    <label>Número M-Pesa (MSISDN)</label>
+    <input type="tel" id="msisdn" placeholder="2588XXXXXXXX" inputmode="numeric">
+
+    <button class="btn" id="payBtn" onclick="pagar()">Pagar agora</button>
+    <div class="hint">Você vai receber um pedido de confirmação (USSD) no seu telemóvel.</div>
+
+    <div id="statusMsg"></div>
+  </div>
+
+  <div id="errorState" style="display:none;">
+    <div class="status err" id="errorMsg"></div>
+  </div>
+</div>
+
+<script>
+const params = new URLSearchParams(window.location.search);
+const sessionId = params.get('session');
+let sessionData = null;
+
+function show(id) {
+  ['loadingState', 'payState', 'errorState'].forEach(x => {
+    document.getElementById(x).style.display = x === id ? 'block' : 'none';
+  });
+}
+
+async function carregar() {
+  if (!sessionId) {
+    document.getElementById('errorMsg').textContent = 'Link de pagamento inválido (sem sessão).';
+    show('errorState');
+    return;
+  }
+
+  try {
+    const res = await fetch(`/api/checkout-sessions/${sessionId}`);
+    const data = await res.json();
+    if (!res.ok) {
+      document.getElementById('errorMsg').textContent = data.message || 'Sessão não encontrada.';
+      show('errorState');
+      return;
+    }
+    sessionData = data;
+
+    if (data.status !== 'pending') {
+      document.getElementById('errorMsg').textContent =
+        data.status === 'paid' ? 'Este pagamento já foi concluído.' : `Esta sessão está com status "${data.status}".`;
+      show('errorState');
+      return;
+    }
+
+    document.getElementById('merchantName').textContent = data.merchantName;
+    document.getElementById('currency').textContent = data.currency;
+    document.getElementById('amount').textContent = Number(data.amount).toLocaleString('pt-PT');
+    show('payState');
+  } catch (e) {
+    document.getElementById('errorMsg').textContent = 'Erro ao carregar a sessão de pagamento.';
+    show('errorState');
+  }
+}
+
+async function pagar() {
+  const msisdn = document.getElementById('msisdn').value.trim();
+  if (!/^\d{9,12}$/.test(msisdn)) {
+    document.getElementById('statusMsg').innerHTML = '<div class="status err">Número inválido</div>';
+    return;
+  }
+
+  const btn = document.getElementById('payBtn');
+  btn.disabled = true;
+  btn.textContent = 'Processando...';
+  document.getElementById('statusMsg').innerHTML =
+    '<div class="status wait"><span class="spinner"></span>Aguarde a confirmação no seu telemóvel...</div>';
+
+  try {
+    const res = await fetch(`/api/checkout-sessions/${sessionId}/pay`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ msisdn })
+    });
+    const data = await res.json();
+
+    if (res.ok && data.status === 'paid') {
+      document.getElementById('statusMsg').innerHTML = '<div class="status ok">✓ Pagamento confirmado!</div>';
+      btn.textContent = 'Pago';
+      if (sessionData.successUrl) {
+        setTimeout(() => { window.location.href = sessionData.successUrl; }, 1500);
+      }
+    } else {
+      document.getElementById('statusMsg').innerHTML =
+        `<div class="status err">Pagamento não concluído${data.responseDesc ? ': ' + data.responseDesc : ''}</div>`;
+      btn.disabled = false;
+      btn.textContent = 'Tentar novamente';
+      if (sessionData.cancelUrl) {
+        setTimeout(() => { window.location.href = sessionData.cancelUrl; }, 2500);
+      }
+    }
+  } catch (e) {
+    document.getElementById('statusMsg').innerHTML = '<div class="status err">Erro de conexão. Tente novamente.</div>';
+    btn.disabled = false;
+    btn.textContent = 'Tentar novamente';
+  }
+}
+
+carregar();
+</script>
+</body>
+</html>

@@ -122,6 +122,63 @@ Variáveis de ambiente adicionais (veja `.env.example`): `MPESA_API_KEY`,
 Reversal), e `GATEWAY_API_KEY`. Use as credenciais da aba **Testing** do seu perfil no
 portal — nunca as de Production num ambiente de desenvolvimento.
 
+## Plataforma multi-tenant de pagamentos (`/api/keys`, `/api/webhooks`, `/api/checkout-sessions`)
+
+Além do gateway "cru" (`/api/mpesa/*`), o projeto tem uma camada de plataforma —
+outros negócios se cadastram, geram suas próprias chaves de API, criam links de
+checkout e recebem webhooks — nos moldes de Zumbopay/DebitoPay/Stripe.
+
+**Modelo agregador**: o dinheiro de todos os lojistas cai na mesma conta M-Pesa da
+plataforma (`MPESA_SERVICE_PROVIDER_CODE`); um livro-razão (`payment_api_ledger_entries`)
+registra quanto cada lojista tem a receber. Repasse (payout) aos lojistas **não** é
+automatizado nesta versão — só o registro contábil.
+
+### Cadastro do lojista
+
+`public/dashboard.html` — signup/login via Supabase Auth (client-side, com
+`@supabase/supabase-js` via CDN). Ao criar a conta, um trigger Postgres
+(`payment_api_handle_new_merchant`) cria automaticamente o perfil em
+`payment_api_merchants`. Pelo dashboard o lojista:
+- gera/revoga pares de chave `pk_live_.../sk_live_...` (o secret só é mostrado uma vez);
+- configura a URL do seu webhook;
+- vê suas transações e receita (lidos direto do Supabase via RLS, sem endpoint próprio).
+
+### Integração do lojista (API)
+
+- `POST /api/checkout-sessions` — `Authorization: Bearer sk_live_...` (chave secreta do
+  lojista). Body: `{ amount, reference?, successUrl?, cancelUrl? }`. Retorna
+  `{ id, url }`, onde `url` é o link de checkout hospedado
+  (`/checkout.html?session=<id>`) pra mandar pro cliente final.
+- `GET /api/checkout-sessions/:id` — público, usado pela própria página de checkout
+  (valor, nome do lojista, status — nada sensível).
+- `POST /api/checkout-sessions/:id/pay` — público, chamado pela página de checkout
+  quando o cliente final informa o MSISDN. Dispara o C2B (`lib/mpesa.js`) com as
+  credenciais globais da plataforma; a resposta da M-Pesa é síncrona por padrão, então
+  o status final (`paid`/`failed`) já volta na mesma chamada.
+- `POST /api/keys` / `GET /api/keys` / `DELETE /api/keys/:id` — `Authorization: Bearer
+  <sessão do Supabase Auth>`, gerenciamento de chaves.
+- `POST /api/webhooks` / `GET /api/webhooks` — idem, configura a URL do webhook do
+  lojista.
+
+Ao um checkout resolver como `paid`, `lib/webhook.js` entrega (melhor esforço, 1
+tentativa) um evento `checkout_session.paid` pro webhook do lojista, assinado em
+`X-Webhook-Signature` (HMAC-SHA256 com o secret gerado na configuração do webhook), e
+loga o resultado em `payment_api_webhook_deliveries`.
+
+### Autenticação (`lib/merchantAuth.js`)
+
+Dois esquemas de bearer token, nunca misturados: `sk_live_...` (chamadas
+servidor-a-servidor do lojista, validadas por hash SHA-256 contra
+`payment_api_api_keys.secret_key_hash`) e sessão do Supabase Auth (chamadas do
+dashboard, validadas com `supabase.auth.getUser(jwt)`).
+
+### Fora de escopo desta versão
+
+Payout automático aos lojistas, reversal exposto na UI do lojista, retry/queue robusto
+de webhook (só 1 tentativa) e fluxo customizado de confirmação de e-mail — usa o padrão
+do Supabase Auth (pode ser necessário desativar "Confirm email" nas configs do projeto
+Supabase pra testar sem precisar confirmar e-mail).
+
 ## Desenvolvimento local da API
 
 ```bash
