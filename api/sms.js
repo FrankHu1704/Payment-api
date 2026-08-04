@@ -1,5 +1,6 @@
 const { getSupabase } = require('../lib/supabase');
 const { detectarCodigo, extrairValor } = require('../lib/detect');
+const { requireBearer } = require('../lib/auth');
 
 // Recebe os comprovativos encaminhados pelo monitor Termux (ver /termux).
 module.exports = async (req, res) => {
@@ -8,9 +9,7 @@ module.exports = async (req, res) => {
     return;
   }
 
-  const auth = req.headers['authorization'] || '';
-  const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
-  if (!process.env.SMS_API_KEY || token !== process.env.SMS_API_KEY) {
+  if (!requireBearer(req, 'SMS_API_KEY')) {
     res.status(401).json({ message: 'Não autorizado' });
     return;
   }

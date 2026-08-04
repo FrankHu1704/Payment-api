@@ -91,6 +91,37 @@ Ele lê `termux-sms-list -l 50` a cada 15s, detecta comprovativos novos e faz `P
 a API na Vercel. Mantém um `enviados.json` local só para não reenviar o mesmo SMS (o
 Supabase também rejeita duplicados do lado do servidor).
 
+## Gateway M-Pesa oficial (`/api/mpesa`)
+
+Além do encaminhamento via SMS, o projeto integra diretamente a
+[M-Pesa Payments Gateway](https://developer.mpesa.vm.co.mz/) (C2B, Reversal e Query
+Transaction Status), autenticando com o esquema RSA descrito em "Getting Started →
+Developing Without a Library" do portal: o `Authorization: Bearer` é o `MPESA_API_KEY`
+cifrado com `MPESA_PUBLIC_KEY` (RSA/PKCS1, 4096 bits) e codificado em Base64 — feito em
+`lib/mpesa.js` com o módulo `crypto` nativo do Node, sem depender do SDK Java/Python do
+portal.
+
+Todos os endpoints exigem `Authorization: Bearer <GATEWAY_API_KEY>` do lado do seu
+próprio backend/frontend — nunca chame `/api/mpesa/*` direto do navegador do cliente
+final, pois isso exporia o `GATEWAY_API_KEY`.
+
+- `POST /api/mpesa/c2b` — inicia um pagamento do cliente para o negócio (USSD Push no
+  celular do cliente). Body: `{ msisdn, amount, transactionReference, thirdPartyReference }`.
+- `POST /api/mpesa/reversal` — reverte uma transação bem-sucedida. Body:
+  `{ transactionId, thirdPartyReference, reversalAmount? }` (sem `reversalAmount`,
+  tenta reversão total).
+- `GET /api/mpesa/status?queryReference=...&thirdPartyReference=...` — consulta o
+  status de uma transação pelo TransactionID, ThirdPartyReference ou ConversationID.
+
+Cada chamada é registrada (melhor esforço, não bloqueia a resposta) na tabela
+`public.payment_api_mpesa_transactions` do Supabase, para auditoria.
+
+Variáveis de ambiente adicionais (veja `.env.example`): `MPESA_API_KEY`,
+`MPESA_PUBLIC_KEY`, `MPESA_HOST`, `MPESA_ORIGIN`, `MPESA_SERVICE_PROVIDER_CODE`,
+`MPESA_INITIATOR_IDENTIFIER` e `MPESA_SECURITY_CREDENTIAL` (últimas duas só para
+Reversal), e `GATEWAY_API_KEY`. Use as credenciais da aba **Testing** do seu perfil no
+portal — nunca as de Production num ambiente de desenvolvimento.
+
 ## Desenvolvimento local da API
 
 ```bash
@@ -98,4 +129,4 @@ npm install
 npx vercel dev
 ```
 
-(requer `SUPABASE_URL`, `SUPABASE_ANON_KEY` e `SMS_API_KEY` num `.env.local`)
+(requer as variáveis de `.env.example` num `.env.local`)
