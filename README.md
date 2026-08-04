@@ -1,28 +1,39 @@
-# Payment API — Furacão Dashboard (Vercel + Supabase)
+# Payment API — Gateway M-Pesa multi-tenant (Vercel + Supabase)
 
-API serverless que recebe comprovativos de pagamento M-PESA/E-MOLA encaminhados por um
-monitor Termux rodando no celular, grava tudo no Supabase e expõe um dashboard web com
-estatísticas de vendas em tempo (quase) real.
+Plataforma de pagamentos M-Pesa nos moldes de Zumbopay/DebitoPay: outros negócios se
+cadastram, geram suas próprias chaves de API, criam links de checkout hospedado e
+recebem webhooks quando um pagamento é confirmado — tudo sobre a M-Pesa Payments
+Gateway oficial. Também mantém, como funcionalidade paralela, o encaminhamento de
+comprovativos via SMS (monitor Termux) que deu origem ao projeto.
+
+## Páginas
+
+- **`/`** — landing page do produto (esta é a porta de entrada pública).
+- **`/dashboard.html`** — signup/login do lojista, chaves de API, webhook, transações.
+- **`/checkout.html?session=<id>`** — página de pagamento hospedada, pra mandar pro
+  cliente final.
+- **`/sms-dashboard.html`** — o dashboard "Furacão" original (monitor de SMS pessoal),
+  mantido por compatibilidade — não faz parte do fluxo de plataforma multi-tenant.
 
 ## Arquitetura
 
 O app original (monitor de SMS + dashboard num único processo com Socket.IO e arquivos
 JSON locais) não roda em serverless: `termux-sms-list` só existe dentro do Termux no
 Android, funções da Vercel não mantêm WebSocket nem disco persistente entre execuções.
-Por isso o projeto foi dividido em duas partes:
+Por isso o projeto foi dividido em partes:
 
-1. **`/api` + `/public`** (este deploy na Vercel) — recebe os comprovativos via HTTP,
-   grava no Supabase (Postgres) e serve o dashboard. Sem estado local: cada request é
-   independente.
-2. **`/termux`** — script que continua rodando no celular via Termux, lê as SMS locais
-   com `termux-sms-list` e encaminha cada comprovativo novo para a API da Vercel.
+1. **`/api` + `/public`** (este deploy na Vercel) — a API (gateway M-Pesa, plataforma
+   multi-tenant, recebimento de SMS) e as páginas estáticas. Sem estado local: cada
+   request é independente, tudo persiste no Supabase (Postgres).
+2. **`/termux`** — script que roda no celular via Termux, lê as SMS locais com
+   `termux-sms-list` e encaminha cada comprovativo novo pra API (parte legada, opcional).
 
 ```
 Celular (Termux) --POST /api/sms--> Vercel (api/*.js) --insert--> Supabase (Postgres)
                                             |
                                       GET /api/stats, /api/logs
                                             |
-                                      Dashboard (public/index.html, polling)
+                                      /sms-dashboard.html (polling)
 ```
 
 ## Deploy (Vercel)
@@ -45,8 +56,9 @@ dois com segurança):
    proteção para Production (ou gere um "Protection Bypass for Automation" e inclua o
    header nas requisições do monitor).
 
-Para deploys futuros (`vercel --prod` ou reimportando o repo), as rotas ficam em
-`/api/sms`, `/api/stats`, `/api/logs`, `/api/status`, e o dashboard na raiz (`/`).
+Para deploys futuros (`vercel --prod` ou reimportando o repo), as rotas da API ficam em
+`/api/*` (veja a seção de rotas abaixo) e as páginas em `/public` — landing em `/`,
+plataforma em `/dashboard.html`, checkout em `/checkout.html`.
 
 ## Banco de dados (Supabase)
 
