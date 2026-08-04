@@ -215,7 +215,7 @@ async function criarChave() {
 
 async function revogarChave(id) {
   if (!confirm('Revogar essa chave? Ela para de funcionar imediatamente.')) return;
-  const { ok, body } = await apiCall(`/api/keys/${id}`, { method: 'DELETE' });
+  const { ok, body } = await apiCall(`/api/keys?id=${id}`, { method: 'DELETE' });
   if (!ok) { alert(body.message || 'Erro ao revogar'); return; }
   await carregarChaves();
 }

@@ -8,6 +8,9 @@ function generateKeyPair() {
   return { publicKey, secretKey };
 }
 
+// GET    /api/keys           lista as chaves do lojista logado
+// POST   /api/keys           cria um novo par pk_live_/sk_live_ (secret só aparece aqui)
+// DELETE /api/keys?id=123    revoga a chave
 module.exports = async (req, res) => {
   const merchantId = await authenticateBySession(req);
   if (!merchantId) {
@@ -50,6 +53,34 @@ module.exports = async (req, res) => {
 
     // secretKey só é retornado aqui — não é recuperável depois (só o hash fica salvo)
     res.status(201).json({ publicKey, secretKey });
+    return;
+  }
+
+  if (req.method === 'DELETE') {
+    const { id } = req.query || {};
+    if (!id) {
+      res.status(400).json({ message: 'id é obrigatório' });
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from('payment_api_api_keys')
+      .update({ revoked_at: new Date().toISOString() })
+      .eq('id', id)
+      .eq('merchant_id', merchantId)
+      .select('id')
+      .maybeSingle();
+
+    if (error) {
+      res.status(500).json({ message: 'Erro ao revogar chave', erro: error.message });
+      return;
+    }
+    if (!data) {
+      res.status(404).json({ message: 'Chave não encontrada' });
+      return;
+    }
+
+    res.status(200).json({ success: true });
     return;
   }
 

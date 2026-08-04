@@ -93,7 +93,7 @@ async function carregar() {
   }
 
   try {
-    const res = await fetch(`/api/checkout-sessions/${sessionId}`);
+    const res = await fetch(`/api/checkout-sessions?id=${sessionId}`);
     const data = await res.json();
     if (!res.ok) {
       document.getElementById('errorMsg').textContent = data.message || 'Sessão não encontrada.';
@@ -133,7 +133,7 @@ async function pagar() {
     '<div class="status wait"><span class="spinner"></span>Aguarde a confirmação no seu telemóvel...</div>';
 
   try {
-    const res = await fetch(`/api/checkout-sessions/${sessionId}/pay`, {
+    const res = await fetch(`/api/checkout-sessions?id=${sessionId}&action=pay`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ msisdn })

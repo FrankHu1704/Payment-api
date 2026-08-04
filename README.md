@@ -101,17 +101,21 @@ cifrado com `MPESA_PUBLIC_KEY` (RSA/PKCS1, 4096 bits) e codificado em Base64 —
 `lib/mpesa.js` com o módulo `crypto` nativo do Node, sem depender do SDK Java/Python do
 portal.
 
-Todos os endpoints exigem `Authorization: Bearer <GATEWAY_API_KEY>` do lado do seu
-próprio backend/frontend — nunca chame `/api/mpesa/*` direto do navegador do cliente
-final, pois isso exporia o `GATEWAY_API_KEY`.
+Os 3 endpoints vivem num único arquivo (`api/mpesa.js`, roteado por `?action=`) — o
+plano Hobby da Vercel limita a 12 Serverless Functions por deploy, então rotas
+relacionadas ficam agrupadas num arquivo em vez de uma pasta por rota.
 
-- `POST /api/mpesa/c2b` — inicia um pagamento do cliente para o negócio (USSD Push no
-  celular do cliente). Body: `{ msisdn, amount, transactionReference, thirdPartyReference }`.
-- `POST /api/mpesa/reversal` — reverte uma transação bem-sucedida. Body:
+Todos exigem `Authorization: Bearer <GATEWAY_API_KEY>` do lado do seu próprio
+backend/frontend — nunca chame `/api/mpesa` direto do navegador do cliente final, pois
+isso exporia o `GATEWAY_API_KEY`.
+
+- `POST /api/mpesa?action=c2b` — inicia um pagamento do cliente para o negócio (USSD
+  Push no celular do cliente). Body: `{ msisdn, amount, transactionReference, thirdPartyReference }`.
+- `POST /api/mpesa?action=reversal` — reverte uma transação bem-sucedida. Body:
   `{ transactionId, thirdPartyReference, reversalAmount? }` (sem `reversalAmount`,
   tenta reversão total).
-- `GET /api/mpesa/status?queryReference=...&thirdPartyReference=...` — consulta o
-  status de uma transação pelo TransactionID, ThirdPartyReference ou ConversationID.
+- `GET /api/mpesa?action=status&queryReference=...&thirdPartyReference=...` — consulta
+  o status de uma transação pelo TransactionID, ThirdPartyReference ou ConversationID.
 
 Cada chamada é registrada (melhor esforço, não bloqueia a resposta) na tabela
 `public.payment_api_mpesa_transactions` do Supabase, para auditoria.
@@ -124,9 +128,13 @@ portal — nunca as de Production num ambiente de desenvolvimento.
 
 ## Plataforma multi-tenant de pagamentos (`/api/keys`, `/api/webhooks`, `/api/checkout-sessions`)
 
-Além do gateway "cru" (`/api/mpesa/*`), o projeto tem uma camada de plataforma —
+Além do gateway "cru" (`/api/mpesa`), o projeto tem uma camada de plataforma —
 outros negócios se cadastram, geram suas próprias chaves de API, criam links de
 checkout e recebem webhooks — nos moldes de Zumbopay/DebitoPay/Stripe.
+
+Pelo mesmo motivo do limite de 12 functions no plano Hobby: `api/checkout-sessions.js`
+concentra criação/consulta/pagamento (roteado por `?id=` e `?action=pay`), e
+`api/keys.js` concentra listar/criar/revogar (roteado por método HTTP + `?id=`).
 
 **Modelo agregador**: o dinheiro de todos os lojistas cai na mesma conta M-Pesa da
 plataforma (`MPESA_SERVICE_PROVIDER_CODE`); um livro-razão (`payment_api_ledger_entries`)
@@ -149,13 +157,13 @@ automatizado nesta versão — só o registro contábil.
   lojista). Body: `{ amount, reference?, successUrl?, cancelUrl? }`. Retorna
   `{ id, url }`, onde `url` é o link de checkout hospedado
   (`/checkout.html?session=<id>`) pra mandar pro cliente final.
-- `GET /api/checkout-sessions/:id` — público, usado pela própria página de checkout
+- `GET /api/checkout-sessions?id=<id>` — público, usado pela própria página de checkout
   (valor, nome do lojista, status — nada sensível).
-- `POST /api/checkout-sessions/:id/pay` — público, chamado pela página de checkout
-  quando o cliente final informa o MSISDN. Dispara o C2B (`lib/mpesa.js`) com as
-  credenciais globais da plataforma; a resposta da M-Pesa é síncrona por padrão, então
-  o status final (`paid`/`failed`) já volta na mesma chamada.
-- `POST /api/keys` / `GET /api/keys` / `DELETE /api/keys/:id` — `Authorization: Bearer
+- `POST /api/checkout-sessions?id=<id>&action=pay` — público, chamado pela página de
+  checkout quando o cliente final informa o MSISDN. Dispara o C2B (`lib/mpesa.js`) com
+  as credenciais globais da plataforma; a resposta da M-Pesa é síncrona por padrão,
+  então o status final (`paid`/`failed`) já volta na mesma chamada.
+- `POST /api/keys` / `GET /api/keys` / `DELETE /api/keys?id=<id>` — `Authorization: Bearer
   <sessão do Supabase Auth>`, gerenciamento de chaves.
 - `POST /api/webhooks` / `GET /api/webhooks` — idem, configura a URL do webhook do
   lojista.
