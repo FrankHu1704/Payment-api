@@ -98,6 +98,20 @@
     </div>
 
     <div class="card">
+      <h2>🧪 Testar Pagamento (sandbox)</h2>
+      <label>Valor (MT)</label>
+      <input type="number" id="testAmount" placeholder="10" min="1">
+      <label>Número M-Pesa (MSISDN)</label>
+      <input type="tel" id="testMsisdn" placeholder="2588XXXXXXXX" inputmode="numeric">
+      <button class="btn btn-primary" id="testPayBtn" onclick="testarPagamento()">Enviar pedido de pagamento</button>
+      <div class="sub" style="margin-top:8px;">
+        Dispara um pedido de confirmação (USSD) real no número informado — use um número
+        de teste do sandbox M-Pesa e confirme com o PIN no telemóvel.
+      </div>
+      <div id="testPayResult" style="margin-top:10px;"></div>
+    </div>
+
+    <div class="card">
       <h2>Chaves de API</h2>
       <div id="apiKeyNew" class="hidden alert alert-warn"></div>
       <div id="apiKeysList"><div class="empty">Nenhuma chave criada</div></div>
@@ -199,6 +213,37 @@ async function carregarChaves() {
       ${k.revoked_at ? '' : `<button class="btn btn-danger" onclick="revogarChave(${k.id})">Revogar</button>`}
     </div>
   `).join('');
+}
+
+async function testarPagamento() {
+  const amount = document.getElementById('testAmount').value;
+  const msisdn = document.getElementById('testMsisdn').value.trim();
+  const resultBox = document.getElementById('testPayResult');
+  const btn = document.getElementById('testPayBtn');
+
+  if (!amount || Number(amount) <= 0) { resultBox.innerHTML = '<div class="alert alert-error">Informe um valor válido</div>'; return; }
+  if (!/^\d{9,12}$/.test(msisdn)) { resultBox.innerHTML = '<div class="alert alert-error">Número inválido</div>'; return; }
+
+  btn.disabled = true;
+  btn.textContent = 'Aguardando confirmação no telemóvel...';
+  resultBox.innerHTML = '';
+
+  const { ok, body } = await apiCall('/api/test-payment', { method: 'POST', body: JSON.stringify({ amount, msisdn }) });
+
+  btn.disabled = false;
+  btn.textContent = 'Enviar pedido de pagamento';
+
+  if (!ok) {
+    resultBox.innerHTML = `<div class="alert alert-error">${body.message || 'Erro ao enviar'}</div>`;
+    return;
+  }
+
+  if (body.success) {
+    resultBox.innerHTML = `<div class="alert alert-warn" style="background:var(--accent-dim); color:var(--accent); border-color:rgba(0,230,118,0.3);">
+      ✓ Pagamento confirmado! TransactionID: ${body.transactionId || '—'}</div>`;
+  } else {
+    resultBox.innerHTML = `<div class="alert alert-error">Não confirmado: ${body.responseDesc || body.responseCode || 'erro desconhecido'}</div>`;
+  }
 }
 
 async function criarChave() {
