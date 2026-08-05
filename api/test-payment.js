@@ -72,6 +72,19 @@ module.exports = async (req, res) => {
     // não falha a resposta por causa do log de auditoria
   }
 
+  // Resposta não é JSON válido — a gateway M-Pesa (ou o WAF na frente dela) devolveu
+  // algo diferente do esperado (ex.: página de erro HTML em vez do payload da API).
+  if (typeof resultado.body.raw === 'string') {
+    res.status(200).json({
+      success: false,
+      responseCode: null,
+      responseDesc: `Gateway M-Pesa indisponível (HTTP ${resultado.statusCode}). Tente novamente em instantes.`,
+      transactionId: null,
+      reference
+    });
+    return;
+  }
+
   const sucesso = resultado.body.output_ResponseCode === 'INS-0';
   res.status(200).json({
     success: sucesso,

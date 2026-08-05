@@ -149,6 +149,27 @@ async function handlePay(req, res, id) {
     return;
   }
 
+  // Resposta não é JSON válido — gateway M-Pesa (ou o WAF na frente dela) indisponível.
+  if (typeof resultado.body.raw === 'string') {
+    const { data: sessionFalha } = await supabase
+      .from('payment_api_checkout_sessions')
+      .update({
+        status: 'failed',
+        response_desc: `Gateway M-Pesa indisponível (HTTP ${resultado.statusCode})`,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', id)
+      .select('*')
+      .maybeSingle();
+    if (sessionFalha) deliverCheckoutWebhook(sessionFalha).catch(() => {});
+    res.status(200).json({
+      status: 'failed',
+      responseCode: null,
+      responseDesc: `Gateway M-Pesa indisponível (HTTP ${resultado.statusCode}). Tente novamente em instantes.`
+    });
+    return;
+  }
+
   const sucesso = resultado.body.output_ResponseCode === 'INS-0';
   const novoStatus = sucesso ? 'paid' : 'failed';
 
